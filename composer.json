@@ -1,0 +1,20 @@
+{
+    "name": "edgji/data-door",
+    "authors": [
+        {
+            "name": "Jose Eduardo Garcia-Jimenez",
+            "email": "j.edgji@gmail.com"
+        }
+    ],
+    "require": {
+        "php": ">=5.3.0",
+        "illuminate/support": "4.1.*",
+        "edgji/laravel-import-engine": "dev-master"
+    },
+    "autoload": {
+        "psr-0": {
+            "Edgji\\DataDoor": "src/"
+        }
+    },
+    "minimum-stability": "stable"
+}
