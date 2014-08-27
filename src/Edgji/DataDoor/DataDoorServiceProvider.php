@@ -1,7 +1,7 @@
 <?php namespace Edgji\DataDoor;
 
 use Illuminate\Support\ServiceProvider;
-use Edgji\DataDoor\Mapping\MapInterface;
+use Mathielen\ImportEngine\ValueObject\ImportConfiguration;
 
 class DataDoorServiceProvider extends ServiceProvider {
 
@@ -13,6 +13,8 @@ class DataDoorServiceProvider extends ServiceProvider {
     public function boot()
     {
         $this->package('edgji/data-door', 'edgji/data-door');
+
+        $this->conditionallyBindRoutes();
     }
 
     /**
@@ -31,45 +33,122 @@ class DataDoorServiceProvider extends ServiceProvider {
             $config = $app['config']['edgji/data-door::config'];
 
             if ( ! isset($config['importers']))
-                return;
+                return null;
+
+            $eventDispatcher = $app['importengine.import.eventdispatcher'];
 
             $importRepository = $app['importengine.importer.repository'];
 
-            foreach($config['importers'] as $id => $settings)
+            return new DataDoor($config['importers'], $eventDispatcher, $importRepository);
+        });
+    }
+
+    private function conditionallyBindRoutes()
+    {
+        $config = $this->app['config']['edgji/lie::config'];
+
+        // only bind import routes if default routing is enabled
+        if ( ! (isset($config['enable_default_routing']) && $config['enable_default_routing']))
+            return;
+
+        // let's pass along the app container
+        $app = $this->app;
+
+        $this->app['router']->group($config['routing'], function($router) use ($app, $config)
+        {
+            $importers = array_keys($config['importers']);
+
+            $storageProvidersRegex = $this->buildStorageProvidersRegex($config);
+
+            foreach($importers as $importer)
             {
-                if ( ! isset($settings['maps']))
-                    continue;
+                // determine http method
+                // if method does not exists or no default is defined skip binding route
+                if ( ! $method = $this->importerHttpMethod($config, $importer)) continue;
 
-                try
+                $route = $router->$method($importer.'/{storageProviderName?}', function($storageProviderName = false) use ($app, $importer, $config)
                 {
-                    $import = $importRepository->get($id);
-                }
-                catch(\InvalidArgumentException $e)
-                {
-                    continue;
-                }
+                    app('edgji.datadoor')->setImportId($importer);
+                    if ( ! $storageProviderName) $storageProviderName = key($config['storageprovider']);
 
-                foreach($settings['maps'] as $mapClass)
-                {
-                    if ( ! class_exists($mapClass))
+                    $storageProviderType = $config['storageprovider'][$storageProviderName]['type'];
+
+                    //handle the uploaded file
+                    $storageLocator = $app['importengine.import.storagelocator'];
+
+                    switch($storageProviderType)
                     {
-                        // TODO throw error / implement error handling
-                        continue;
+                        case 'upload':
+                            $requestFiles = $app['request']->file();
+                            $fileId = reset($requestFiles);
+                            break;
+
+                        case 'directory':
+                            $fileName = array_get($config['importers'][$importer], 'preconditions.filename', false);
+                            if ( ! $fileName) $fileName = array_get($config['storageprovider'], $storageProviderName.'.file', false);
+
+                            $path = str_replace("{app_storage}", $this->app['path.storage'], $config['storageprovider'][$storageProviderName]['path']);
+                            $fileId = $fileName ? "{$path}/{$fileName}" : false;
+                            break;
+
+                        default:
+                            $fileId = false;
                     }
 
-                    $map = $app->make($mapClass);
+                    if ( ! $fileId) return; // should probably throw invalid file exception instead
 
-                    if ( ! $map instanceof MapInterface) {
-                        throw new \InvalidArgumentException();
-                    }
-                    $map->mapFields($import->mappings());
+                    $storageSelection = $storageLocator->selectStorage($storageProviderName, $fileId);
+
+                    //create a new import configuration with your file for the specified importer
+                    //you can also use auto-discovery with preconditions (see config above and omit 2nd parameter here)
+                    $importConfiguration = new ImportConfiguration($storageSelection, $importer);
+
+                    //build the import engine
+                    $importBuilder = $app['importengine.import.builder'];
+                    $importBuilder->build($importConfiguration);
+
+                    //run the import
+                    $importRunner = $app['importengine.import.runner'];
+                    $importRun = $importRunner->run($importConfiguration->toRun());
+
+                    return $importRun->getStatistics();
+                });
+
+                if ($storageProvidersRegex)
+                {
+                    $route->where('storageProviderName', $storageProvidersRegex);
                 }
             }
-            // TODO package into class
-            //return new DataDoor();
         });
+    }
 
-        $this->app['edgji.datadoor'];
+    private function buildStorageProvidersRegex($config)
+    {
+        if ( ! isset($config['storageprovider'])) return false;
+
+        $storageProviders = array_keys($config['storageprovider']);
+
+        return "(" . implode('|', $storageProviders) . ")";
+    }
+
+    private function importerHttpMethod($config, $importer)
+    {
+        if (isset($config['importers'][$importer]['http_method']))
+        {
+            $method = $this->validateHttpMethod($config['importers'][$importer]['http_method']);
+            if ($method) return $method;
+        }
+
+        return $this->validateHttpMethod($config['default_http_method']) ?: false;
+    }
+
+    private function validateHttpMethod($method)
+    {
+        $method = strtolower($method);
+
+        if ( ! in_array($method, array('get', 'post'))) return false;
+
+        return $method;
     }
 
     /**
