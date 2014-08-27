@@ -1,7 +1,7 @@
 <?php namespace Edgji\DataDoor;
 
-use Edgji\DataDoor\Mapping\MapInterface;
 use Illuminate\Support\ServiceProvider;
+use Edgji\DataDoor\Mapping\MapInterface;
 
 class DataDoorServiceProvider extends ServiceProvider {
 
@@ -12,7 +12,7 @@ class DataDoorServiceProvider extends ServiceProvider {
      */
     public function boot()
     {
-        $this->package('edgji/data-door', 'edgji::datadoor');
+        $this->package('edgji/data-door', 'edgji/data-door');
     }
 
     /**
@@ -26,9 +26,13 @@ class DataDoorServiceProvider extends ServiceProvider {
     }
 
     protected function registerDataDoor() {
-        $this->app['datadoor'] = $this->app->share(function($app)
+        $this->app['edgji.datadoor'] = $this->app->share(function($app)
         {
-            $config = '';
+            $config = $app['config']['edgji/data-door::config'];
+
+            if ( ! isset($config['importers']))
+                return;
+
             $importRepository = $app['importengine.importer.repository'];
 
             foreach($config['importers'] as $id => $settings)
@@ -39,25 +43,33 @@ class DataDoorServiceProvider extends ServiceProvider {
                 try
                 {
                     $import = $importRepository->get($id);
-                    //$import->mappings();
-                    foreach($settings['maps'] as $mapClass)
-                    {
-                        $map = $app->make($mapClass);
-
-                        if ( ! $map instanceof MapInterface) {
-                            throw new \InvalidArgumentException();
-                        }
-                        $map->mapFields($import->mapping());
-                    }
                 }
                 catch(\InvalidArgumentException $e)
                 {
                     continue;
                 }
+
+                foreach($settings['maps'] as $mapClass)
+                {
+                    if ( ! class_exists($mapClass))
+                    {
+                        // TODO throw error / implement error handling
+                        continue;
+                    }
+
+                    $map = $app->make($mapClass);
+
+                    if ( ! $map instanceof MapInterface) {
+                        throw new \InvalidArgumentException();
+                    }
+                    $map->mapFields($import->mappings());
+                }
             }
             // TODO package into class
             //return new DataDoor();
         });
+
+        $this->app['edgji.datadoor'];
     }
 
     /**
@@ -67,6 +79,6 @@ class DataDoorServiceProvider extends ServiceProvider {
      */
     public function provides()
     {
-        return array();
+        return array('edgji.datadoor');
     }
 }
