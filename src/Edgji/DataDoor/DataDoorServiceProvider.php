@@ -1,5 +1,7 @@
 <?php namespace Edgji\DataDoor;
 
+use Edgji\DataDoor\Import\CallBackImportService;
+
 use Illuminate\Support\ServiceProvider;
 use Mathielen\ImportEngine\ValueObject\ImportConfiguration;
 
@@ -14,7 +16,24 @@ class DataDoorServiceProvider extends ServiceProvider {
     {
         $this->package('edgji/data-door', 'edgji/data-door');
 
-        $this->conditionallyBindRoutes();
+        $this->loadDataDoorWhenEventDistpatcherResolves();
+
+        $this->defaultRouting();
+    }
+
+    protected function loadDataDoorWhenEventDistpatcherResolves() {
+        $this->app->resolving('importengine.import.eventdispatcher', function($eventDispatcher, $app)
+        {
+            $config = $app['config']['edgji/data-door::config'];
+
+            if ( ! isset($config['importers']))
+                return null;
+
+            $dataDoor = new DataDoor($eventDispatcher, $config['importers']);
+
+            // share the instance
+            $app->instance('edgji.datadoor', $dataDoor);
+        });
     }
 
     /**
@@ -24,26 +43,18 @@ class DataDoorServiceProvider extends ServiceProvider {
      */
     public function register()
     {
-        $this->registerDataDoor();
+        $this->registerCallbackImport();
     }
 
-    protected function registerDataDoor() {
-        $this->app['edgji.datadoor'] = $this->app->share(function($app)
+    protected function registerCallbackImport() {
+        $this->app['edgji.datadoor.importcallback'] = $this->app->share(function($app)
         {
-            $config = $app['config']['edgji/data-door::config'];
-
-            if ( ! isset($config['importers']))
-                return null;
-
-            $eventDispatcher = $app['importengine.import.eventdispatcher'];
-
-            $importRepository = $app['importengine.importer.repository'];
-
-            return new DataDoor($config['importers'], $eventDispatcher, $importRepository);
+            $callbacks = $app['config']['edgji/data-door::callbacks'];
+            return new CallBackImportService($callbacks);
         });
     }
 
-    private function conditionallyBindRoutes()
+    private function defaultRouting()
     {
         $config = $this->app['config']['edgji/lie::config'];
 
@@ -68,7 +79,6 @@ class DataDoorServiceProvider extends ServiceProvider {
 
                 $route = $router->$method($importer.'/{storageProviderName?}', function($storageProviderName = false) use ($app, $importer, $config)
                 {
-                    app('edgji.datadoor')->setImportId($importer);
                     if ( ! $storageProviderName) $storageProviderName = key($config['storageprovider']);
 
                     $storageProviderType = $config['storageprovider'][$storageProviderName]['type'];
@@ -158,6 +168,9 @@ class DataDoorServiceProvider extends ServiceProvider {
      */
     public function provides()
     {
-        return array('edgji.datadoor');
+        return array(
+            'edgji.datadoor',
+            'edgji.datadoor.importcallback',
+        );
     }
 }
