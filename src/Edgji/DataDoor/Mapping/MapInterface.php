@@ -1,8 +1,10 @@
 <?php namespace Edgji\DataDoor\Mapping;
 
+use Mathielen\ImportEngine\Mapping\Mappings;
+
 interface MapInterface
 {
 
-    public function mapFields(ReaderInterface $mappings);
+    public function mapFields(Mappings $mappings);
 
 }
